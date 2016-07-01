@@ -7,9 +7,9 @@ log = logging.getLogger('symmrpc')
 
 from ws4py.client.geventclient import WebSocketClient
 import gevent
-from gevent import queue
-from symmrpc.protocol import SymmetricRPCClient
-from symmrpc.serdes import SerDesMsgpack
+from gevent.queue import Queue
+from protocol import SymmetricRPCClient
+from serdes import SerDesMsgpack
 
 
 class WorkerStream(WebSocketClient):
@@ -20,7 +20,7 @@ class WorkerStream(WebSocketClient):
         self.serdes = serdes()
 
     def closed(self, code, reason=None):
-        print("Closed down", code, reason)
+        log.debug('Closed down %d %s', code, reason)
         self.disconnected = True
         if not self.result is None:
             # worker crash case or just disconnect
@@ -39,6 +39,13 @@ class WorkerStream(WebSocketClient):
             log.debug('received msg: %s', msg)
             self.result.put(msg)
 
+    def receive_messages(self):
+        queue = self.result
+        msgs = [queue.get()]
+        while not queue.empty():
+            msgs.append(queue.get())
+        return msgs
+
     def set_queue(self, queue):
         self.result = queue
 
@@ -46,7 +53,10 @@ class WorkerStream(WebSocketClient):
         return self.result
 
     def send_message(self, msg):
+#        log.debug('!send')
         self.send(self.serdes.serialize(msg), binary=True)
+#        log.debug('!sent!')
+
 
 
 
@@ -62,9 +72,12 @@ class WorkerProxy:
         def try_connect():
             stream = WorkerStream('ws://'+addr+':'+str(port)+'/ws', self.serdes)
             try:
+                log.debug('try connect')
                 stream.connect()
+#                log.debug('success')
                 return stream
             except:
+#                log.debug('failed')
                 return None
 
         while True:
@@ -94,22 +107,23 @@ class WorkerProxy:
         while True:
             log.debug('try to find a ready stream')
             for n in range(len(self.streams)):
-                log.debug('check for stream %d: obj %s result %s', n, self.streams[n].disconnected, self.streams[n].result)
+                log.debug('check for stream %d: disconnected %s result %s', n, self.streams[n].disconnected, self.streams[n].result)
                 if self.streams[n].is_connected():
                     # TODO: split to two passes for performance reasons
-                    lifoqueue = self.streams[n].get_queue()
-                    if lifoqueue is None:
+                    queue = self.streams[n].get_queue()
+                    if queue is None:
                         return n
-                    if self.clients[n].is_call_finished(lifoqueue):
+                    log.debug('try check queue: empty: %d', queue.empty())
+                    if self.clients[n].is_call_finished():
                         return n
             gevent.sleep(1)
 
     def call_func(self, func_name, orig_args):
         n = self.find_ready_stream()
         log.debug('got ready stream')
-        lifoqueue = queue.Queue()
-        self.streams[n].set_queue(lifoqueue)
-        res = self.clients[n].call_func(func_name, orig_args, lifoqueue, self.streams[n].send_message)
+        queue = Queue()
+        self.streams[n].set_queue(queue)
+        res = self.clients[n].call_func(func_name, orig_args, self.streams[n].receive_messages, self.streams[n].send_message)
         self.streams[n].set_queue(None)
         return res
 

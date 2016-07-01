@@ -30,6 +30,7 @@ class MyWebSocket(WebSocket):
         self.recv_data = init_worker(lambda x: self.send(x, binary=True))
 
     def received_message(self, message):
+#        log.debug('Server websocket received')
         # TODO: check message.is_binary
         self.recv_data(message.data)
 
@@ -40,6 +41,7 @@ class MyWebSocket(WebSocket):
 def start_worker(server, worker_num, init_woker_proc):
     global init_worker
     init_worker = init_woker_proc
+
     log.debug('starting worker %d', worker_num)
     try:
         server.initialize_websockets_manager()
@@ -68,4 +70,6 @@ def master(count, host, port, init_worker_proc):
 
 
 def run_workers(host, port, count, init_worker_proc):
-    Process(target=master, args=(count, host, port, init_worker_proc)).start()
+    process = Process(target=master, args=(count, host, port, init_worker_proc))
+    process.start()
+    return process
